@@ -1,18 +1,17 @@
 
-#1
+#1 Using cat and wc -l to count lines
 cat ../data/407228326.fasta | wc -l
-wc -l ../data/407228326.fasta
 cat ../data/407228412.fasta | wc -l
 cat ../data/E.coli.fasta | wc -l
 
-#2
+#2 Using tail to select data from second line 
 tail -n +2 ../data/E.coli.fasta
 
-#3
+#3 wc - c to count bytes
 tail -n +2 ../data/E.coli.fasta | wc -c
 
-#4
+#4 grep particular sequence “ATGC”
 tail -n +2 ../data/E.coli.fasta | tr -d "\n" | grep -o "ATGC" | wc -l 
 
-#5
+#5 Select A_T and G_C and divde them
 A_T=$(tail -n+2 ../data/E.coli.fasta | tr -d "\n" | grep -o [A,T] | wc -l); G_C=$(tail -n+2 ../data/E.coli.fasta | tr -d "\n" | grep -o [G,C] | wc -l); ratio=$(echo "scale=5; ($A_T)/($G_C)" | bc); echo "$ratio"
