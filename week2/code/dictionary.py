@@ -24,3 +24,16 @@ taxa = [ ('Myotis lucifugus','Chiroptera'),
 # Now write a list comprehension that does the same (including the printing after the dictionary has been created)  
  
 #### Your solution here #### 
+
+taxa_dic = {}
+
+for t in taxa:
+    species, order_name = t
+    if order_name not in taxa_dic:
+        taxa_dic[order_name] = set()
+    taxa_dic[order_name].add(species)
+
+print(taxa_dic)
+
+taxa_dic = {order_name: {species for species, ord in taxa if ord == order_name} for _, order_name in taxa}
+print(taxa_dic)
