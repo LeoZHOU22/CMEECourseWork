@@ -1,0 +1,25 @@
+\documentclass[a4paper,12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+
+\title{Is Florida Getting Warmer?}
+\author{Your Name}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section*{Introduction}
+We analyze the temperature trend in Florida using annual data from Key West during the 20th century.
+
+\section*{Method}
+We calculated the correlation coefficient between years and temperature to gauge the trend. Given the temporal nature of the data, we used a permutation approach by reshuffling the temperatures and recalculating the correlation coefficient 10,000 times.
+
+\section*{Results}
+\input{florida_results.csv}
+
+\section*{Conclusion}
+Based on our analysis, \textbf{(interpretation based on p-value)}: for instance, if the p-value is less than 0.05, the trend in temperature is statistically significant, suggesting Florida is indeed getting warmer.
+
+\end{document}
