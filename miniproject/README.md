@@ -42,4 +42,4 @@ Ggplot2
 
 Special Instructions
 
-Please ensure that you have the specified version of R installed on your system. For running the R notebook, it's recommended to open it in an environment that supports R notebooks, such as RStudio. Make sure all the listed packages are installed using the provided installation commands before running the notebook.
+Please ensure that you have the specified version of R installed on your system. For running the R notebook, it's recommended to open it in an environment that supports R notebooks, such as RStudio. Or bash the run_Miniproject.bash to see the .html file. Make sure all the listed packages are installed using the provided installation commands before running the notebook.
