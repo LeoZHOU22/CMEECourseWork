@@ -1,0 +1,561 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+# Load necessary libraries
+library(readr)
+library(minpack.lm)  # For nlsLM, more robust than nls
+library(dplyr)
+library(broom)
+library(ggplot2)
+
+# Load the dataset
+data_path <- "../data/ModifiedLogisticGrowthData.csv"
+data <- read_csv(data_path)
+```
+```{r}
+# Function to create LogPopBio column
+create_LogPopBio <- function(subset) {
+  if ("PopBio" %in% names(subset)) {
+    # Filter out rows where Time <= 0
+    subset <- subset[subset$Time > 0, ]
+    # Apply log transformation and create new column
+    subset$LogPopBio <- log(subset$PopBio)
+  } else {
+    stop("Column 'PopBio' not found in the dataset")
+  }
+  return(subset)
+}
+subsets <- split(data, data$UniqueGrowthCurveID)
+# Apply the function to each subset
+subsets <- lapply(subsets, create_LogPopBio)
+# Assuming your data frame is named 'data' and it has a column named 'PopBio'
+data$LogPopBio <- log(data$PopBio)
+
+# Check the first few rows of the data to confirm the new column has been added
+head(data)
+# Count NA values in the LogPopBio column
+na_count_in_LogPopBio <- sum(is.na(data$LogPopBio))
+
+# Print the count
+print(na_count_in_LogPopBio)
+# Remove rows with NA values in the main data frame
+data_clean <- na.omit(data)
+
+# If you have a subset of your data, do the same for the subset
+# Assuming your subset is named 'subset'
+subset_clean <- na.omit(subset)
+
+# Check the first few rows of the cleaned data
+head(data_clean)
+head(subset_clean)
+```
+
+do the linear fitting use logPopBio
+```{r}
+
+library(broom)  # for tidy() function to extract model coefficients
+
+fit_and_summarize_all_subsets <- function(subsets) {
+  results_stats <- data.frame(UniqueGrowthCurveID = character(), Model = character(), 
+                                R2 = numeric(), AIC = numeric(), AICc = numeric(), BIC = numeric(), 
+                                Params = I(list()), stringsAsFactors = FALSE)
+
+  # Initialize results_points before the loop
+  results_points <- data.frame(UniqueGrowthCurveID = integer(), Time = numeric(), 
+                                 ModelPoints = numeric(), ModelType = character(), 
+                                 stringsAsFactors = FALSE)
+
+  
+  for (id in seq_along(subsets)) {
+    subset_data <- subsets[[id]]
+    # Compute LogPopBio if not present
+    if (!"LogPopBio" %in% names(subset_data)) {
+      subset_data$LogPopBio <- log(subset_data$PopBio)
+    }
+    # Remove rows with NA, NaN, or Inf values in LogPopBio
+    subset_data <- subset_data[!is.na(subset_data$LogPopBio) & !is.nan(subset_data$LogPopBio) & !is.infinite(subset_data$LogPopBio), ]
+    
+    # Check if there's enough data left for fitting models
+    if (nrow(subset_data) <= 3) {
+      next  # Skip this subset if too few data points remain
+    }
+    
+    
+    # Fit models and get summaries
+    fit_linear <- lm(LogPopBio ~ Time, data = subset_data)
+    linear_params <- tidy(fit_linear)
+    
+    fit_quadratic <- lm(LogPopBio ~ poly(Time, 2, raw = TRUE), data = subset_data)
+    quadratic_params <- tidy(fit_quadratic)
+    
+    fit_cubic <- lm(LogPopBio ~ poly(Time, 3, raw = TRUE), data = subset_data)
+    cubic_params <- tidy(fit_cubic)
+    
+    # Create model points and add to results_points
+    linear_points <- predict(fit_linear, newdata = data.frame(Time = subset_data$Time))
+    results_points <- rbind(results_points, 
+                            data.frame(UniqueGrowthCurveID = rep(id, length(linear_points)), 
+                                       Time = subset_data$Time, ModelPoints = linear_points, 
+                                       ModelType = "Linear"))
+
+    quadratic_points <- predict(fit_quadratic, newdata = data.frame(Time = subset_data$Time))
+    results_points <- rbind(results_points, 
+                            data.frame(UniqueGrowthCurveID = rep(id, length(quadratic_points)), 
+                                       Time = subset_data$Time, ModelPoints = quadratic_points, 
+                                       ModelType = "Quadratic"))
+
+    cubic_points <- predict(fit_cubic, newdata = data.frame(Time = subset_data$Time))
+    results_points <- rbind(results_points, 
+                            data.frame(UniqueGrowthCurveID = rep(id, length(cubic_points)), 
+                                       Time = subset_data$Time, ModelPoints = cubic_points, 
+                                       ModelType = "Cubic"))
+    # Summarize and add parameters
+    summary_linear <- data.frame(UniqueGrowthCurveID = id, Model = "Linear", 
+                                 R2 = glance(fit_linear)$r.squared, AIC = AIC(fit_linear),AICc = 1, BIC = BIC(fit_linear),
+                                 Params = I(list(linear_params)))
+    summary_quadratic <- data.frame(UniqueGrowthCurveID = id, Model = "Quadratic", 
+                                    R2 = glance(fit_quadratic)$r.squared, AIC = AIC(fit_quadratic), AICc = 1,BIC = BIC(fit_quadratic),
+                                    Params = I(list(quadratic_params)))
+    summary_cubic <- data.frame(UniqueGrowthCurveID = id, Model = "Cubic", 
+                                R2 = glance(fit_cubic)$r.squared, AIC = AIC(fit_cubic), BIC = BIC(fit_cubic),AICc = 1,
+                                Params = I(list(cubic_params)))
+    
+    results_stats<- rbind( results_stats, summary_linear, summary_quadratic, summary_cubic)
+  }
+  
+  return(list(stats = results_stats, points = results_points))
+}
+
+# Example usage:
+fit_results_linear <- fit_and_summarize_all_subsets(subsets)
+head(fit_results_linear$stats)
+head(fit_results_linear$points)
+
+```
+
+do the logistic fitting
+```{r}
+# Define the logistic model function
+logistic_model <- function(t, r_max, K, N_0) {
+  return(N_0 * K * exp(r_max * t)/(K + N_0 * (exp(r_max * t) - 1)))
+}
+# Define a function for rolling regression to find the steepest slope for a single subset
+find_max_slope <- function(subset, window_size) {
+  max_slope <- -Inf
+  # Ensure that window_size is not larger than the number of rows in subset
+  if (window_size > nrow(subset)) {
+    stop("window_size is larger than the number of rows in the subset")
+  }
+  
+  for (i in 1:(nrow(subset) - window_size + 1)) {
+    logPopBio_window <- subset$LogPopBio[i:(i + window_size - 1)]
+    time_window <- subset$Time[i:(i + window_size - 1)]
+    fit <- lm(logPopBio_window ~ time_window)
+    slope <- coef(fit)["time_window"]
+    if (!is.na(slope) && !is.null(slope) && slope > max_slope) {
+      max_slope <- slope
+    }
+  }
+  return(max_slope)
+}
+
+fit_logistic_to_subset_df <- function(subset, window_size, id) {
+  # Ensure LogPopBio is computed
+  if (!"LogPopBio" %in% names(subset)) {
+    subset$LogPopBio <- log(subset$PopBio)
+  }
+  
+  # Remove rows with NA, NaN, or Inf in LogPopBio
+  subset <- subset[!is.na(subset$LogPopBio) & !is.nan(subset$LogPopBio) & !is.infinite(subset$LogPopBio), ]
+  
+  # Calculate starting values using LogPopBio
+  N_0_start <- min(subset$LogPopBio)
+  K_start <- max(subset$LogPopBio)
+  r_max_start <- find_max_slope(subset, window_size)
+  
+  # Initialize result as NA values
+  result_stats <- data.frame(UniqueGrowthCurveID = id, Model = "Logistic", R2 = NA, 
+                             AIC = NA, AICc = NA, BIC = NA, Params = I(list(NA)))
+  
+  # Initialize an empty data frame for logistic points
+  result_points <- data.frame(UniqueGrowthCurveID = integer(), Time = numeric(), 
+                              LogisticPoints = numeric())
+  
+  # Fit the logistic model using LogPopBio and nlsLM
+  fit_logistic <- tryCatch({
+    nlsLM(LogPopBio ~ logistic_model(t = Time, r_max, K, N_0), subset,
+          start = list(r_max = r_max_start, N_0 = N_0_start, K = K_start),
+          control = nls.lm.control(maxiter = 500))
+  }, error = function(e) {
+    warning("Error in fitting logistic model for subset ", id, ": ", e$message)
+    return(NULL)  # Return NULL to indicate failure
+  })
+  
+  if (!is.null(fit_logistic)) {
+    # Compute R-squared and other statistics
+    residuals <- residuals(fit_logistic)
+    ss_res <- sum(residuals^2)
+    ss_tot <- sum((subset$LogPopBio - mean(subset$LogPopBio))^2)
+    r_squared <- 1 - (ss_res / ss_tot)
+    
+    # Calculate AIC and BIC
+    aic_value <- AIC(fit_logistic)
+    bic_value <- BIC(fit_logistic)
+    k <- length(coef(fit_logistic))  # Number of parameters in the model
+    n <- nrow(subset)  # Sample size
+    
+    # Calculate AICc
+    aicc_value <- aic_value + (2 * k * (k + 1)) / (n - k - 1)
+    # Try to extract parameters
+    logistic_params <- tryCatch(tidy(fit_logistic), error = function(e) NULL)
+    logistic_points <- logistic_model(t = subset$Time, 
+                                      r_max = coef(fit_logistic)["r_max.time_window"], 
+                                      K = coef(fit_logistic)["K"], 
+                                      N_0 = coef(fit_logistic)["N_0"])
+    
+    # Create separate data frame for logistic points
+    logistic_points_df <- data.frame(UniqueGrowthCurveID = rep(id, length(logistic_points)),
+                                     Time = subset$Time, 
+                                     LogisticPoints = logistic_points)
+    
+    # Update result data frame to only contain summary statistics
+   
+    if (!is.null(logistic_params) && nrow(logistic_params) > 0) {
+      # Update result if parameters were successfully extracted
+      # Update result data frames
+      result_stats <- data.frame(UniqueGrowthCurveID = id, Model = "Logistic", R2 = r_squared, 
+                                 AIC = aic_value, AICc = aicc_value, BIC = bic_value, 
+                                 Params = I(list(logistic_params)))
+      
+      result_points <- data.frame(UniqueGrowthCurveID = rep(id, length(logistic_points)),
+                                  Time = subset$Time, LogisticPoints = logistic_points)
+    }
+    
+    return(list(stats = result_stats, points = result_points))
+  }
+}
+window_size<-3
+# Apply the logistic fitting function to each subset and create a data frame of results
+all_stats <- list()
+all_points <- list()
+
+for (x in seq_along(subsets)) {
+  fit_results <- fit_logistic_to_subset_df(subsets[[x]], window_size, x)
+  all_stats[[x]] <- fit_results$stats
+  all_points[[x]] <- fit_results$points
+}
+
+# Combine all results into data frames
+combined_stats_logistic_df <- do.call(rbind, all_stats)
+combined_points_logistic_df <- do.call(rbind, all_points)
+
+head(combined_points_logistic_df)
+head(combined_stats_logistic_df)
+
+```
+```{r}
+selected_subset_16 <- subsets[[16]]
+initial_K_16 <- max(selected_subset_16$LogPopBio)
+initial_N_0_16 <- min(selected_subset_16$LogPopBio)
+initial_r_max_16 <- find_max_slope(selected_subset_16, window_size = 10)  # This is a guess; you may need to adjust it based on your data
+
+fit_16 <- nlsLM(LogPopBio ~ logistic_model(Time, r_max, K, N_0), 
+             data = selected_subset_16, 
+             start = list(r_max = initial_r_max_16, K = initial_K_16, N_0 = initial_N_0_16),
+             control = nls.lm.control(maxiter = 500))
+fitted_parameters_16 <- coef(fit_16)
+logistic_points_16 <- logistic_model(t = selected_subset_16$Time, 
+                                  r_max = coef(fit_16)["r_max.time_window"], 
+                                  K = coef(fit_16)["K"], 
+                                  N_0 = coef(fit_16)["N_0"])
+residuals_16 <- residuals(fit_16)
+ss_res_16 <- sum(residuals_16^2)
+ss_tot_16 <- sum((selected_subset_16$LogPopBio - mean(selected_subset_16$LogPopBio))^2)
+r_squared_16 <- 1 - (ss_res_16 / ss_tot_16)
+
+# Calculate AIC and BIC
+aic_value_16 <- AIC(fit_16)
+bic_value_16 <- BIC(fit_16)
+k_16 <- length(coef(fit_16))  # Number of parameters in the model
+n_16 <- nrow(selected_subset_16)  # Sample size
+
+aicc_value_16 <- aic_value_16 + (2 * k_16 * (k_16 + 1)) / (n_16 - k_16 - 1)
+```
+
+do the gompertz fitting
+```{r}
+gompertz_model <- function(t, r_max, K, N_0, t_lag){ # Modified gompertz growth model (Zwietering 1990)
+  return(N_0 + (K - N_0) * exp(-exp(r_max * exp(1) * (t_lag - t)/((K - N_0) * log(10)) + 1)))
+}  
+
+fit_gompertz_to_subset_df <- function(subset, window_size, id) {
+  subset <- subset[subset$PopBio > 0, ]
+  N_0_start <- min(subset$LogPopBio) # Lowest population size, note log scale
+  K_start <- max(subset$LogPopBio)   # Highest population size, note log scale
+  r_max_start <- find_max_slope(subset, window_size) # Ensure this is implemented correctly
+  
+  # Initial guess for t_lag
+  t_lag_start <- subset$Time[which.max(diff(diff(subset$LogPopBio)))]
+  # Initialize result
+  result_stats <- data.frame(UniqueGrowthCurveID = id, Model = "Logistic", R2 = NA, 
+                             AIC = NA, AICc = NA, BIC = NA, Params = I(list(NA)))
+  result_points <- data.frame(UniqueGrowthCurveID = integer(), Time = numeric(), 
+                              LogisticPoints = numeric())
+# Ensure sensible defaults if needed
+  N_0_start <- ifelse(is.finite(N_0_start), N_0_start, 1)
+  K_start <- ifelse(is.finite(K_start), K_start, max(subset$LogPopBio, na.rm = TRUE))
+  r_max_start <- ifelse(is.finite(r_max_start), r_max_start, 0.1)
+  t_lag_start <- ifelse(is.finite(t_lag_start) && t_lag_start > 0, t_lag_start, min(subset$Time, na.rm = TRUE))
+
+  # Bounds for the parameters
+  lower_bounds <- c(t_lag = 0, r_max = 0, N_0 = min(subset$LogPopBio), K = min(subset$LogPopBio))
+  upper_bounds <- c(t_lag = max(subset$Time), r_max = 10, N_0 = max(subset$LogPopBio), K = max(subset$LogPopBio))
+  # Fit the Gompertz model within try block
+  
+  fit_result <- try({
+    nlsLM(LogPopBio ~ gompertz_model(t = Time, r_max, K, N_0, t_lag), subset,
+          start = list(t_lag = t_lag_start, r_max = r_max_start, N_0 = N_0_start, K = K_start),
+          control = nls.lm.control(maxiter = 500), lower = lower_bounds, upper = upper_bounds)
+  })
+
+  if (inherits(fit_result, "try-error") || is.null(fit_result)) {
+    warning("Error in fitting Gompertz model for subset ", id)
+  } else {
+    # Compute R-squared and other statistics
+    residuals <- residuals(fit_result)
+    ss_res <- sum(residuals^2)
+    ss_tot <- sum((subset$LogPopBio - mean(subset$LogPopBio))^2)
+    r_squared <- 1 - (ss_res / ss_tot)
+
+    # Calculate AIC and BIC
+    aic_value <- AIC(fit_result)
+    bic_value <- BIC(fit_result)
+    k <- length(coef(fit_result))  # Number of parameters in the model
+    n <- nrow(subset)  # Sample size
+
+    # Calculate AICc
+    aicc_value <- aic_value + (2 * k * (k + 1)) / (n - k - 1)
+    # Extract parameters
+    gompertz_params <- tryCatch(tidy(fit_result), error = function(e) NULL)
+
+    # Check if parameters were successfully extracted
+    if (!is.null(gompertz_params) && nrow(gompertz_params) > 0) {
+      # Update result with parameters
+      result_stats <- data.frame(UniqueGrowthCurveID = id, Model = "Gompertz", R2 = r_squared, AIC = aic_value, BIC = bic_value,AICc=aicc_value, Params = I(list(gompertz_params)))
+      
+    }
+   # Calculate Gompertz points using the fitted model
+        gompertz_points <- gompertz_model(t = subset$Time, 
+                                          r_max = coef(fit_result)["r_max.time_window"], 
+                                          K = coef(fit_result)["K"], 
+                                          N_0 = coef(fit_result)["N_0"],
+                                          t_lag = coef(fit_result)["t_lag"])
+
+        # Add Gompertz points to the result_points data frame
+        result_points <- data.frame(UniqueGrowthCurveID = rep(id, length(gompertz_points)),
+                                    Time = subset$Time, 
+                                    GompertzPoints = gompertz_points)
+    }
+
+    # Return both statistics and points
+    return(list(stats = result_stats, points = result_points))
+}
+
+# Apply the Gompertz fitting function to each subset and create data frames of results
+all_gompertz_stats <- list()
+all_gompertz_points <- list()
+
+window_size <- 3  # Set your window_size
+
+for (x in seq_along(subsets)) {
+    fit_results <- fit_gompertz_to_subset_df(subsets[[x]], window_size, x)
+    all_gompertz_stats[[x]] <- fit_results$stats
+    all_gompertz_points[[x]] <- fit_results$points
+}
+
+```
+
+
+```{r}
+# Combine all results into data frames
+combined_stats_gompertz_df <- do.call(rbind, all_gompertz_stats)
+combined_points_gompertz_df <- do.call(rbind, all_gompertz_points)
+
+# Print the results
+head(combined_stats_gompertz_df)
+head(combined_points_gompertz_df)
+
+```
+combine data
+```{r}
+# Combined model16 to logistic stats data frame
+new_row_16 <- data.frame(
+    UniqueGrowthCurveID = 16,
+    Model = "Logistic",
+    R2 = r_squared_16,           
+    AIC = aic_value_16,          
+    AICc = aicc_value_16,        
+    BIC = bic_value_16,          
+    Params = I(list(coef(fit_16)))    
+)
+# Append the new row to the dataframe
+combined_stats_logistic_df <- rbind(combined_stats_logistic_df, new_row_16)
+
+# Combine all results into one data frame
+combined_results<- rbind(fit_results_linear$stats, combined_stats_logistic_df, combined_stats_gompertz_df)
+
+head(combined_results)
+
+```
+
+
+```{r}
+filtered_data_results <- subset(combined_results, R2 < 1 & AIC > -Inf & BIC > -Inf & AICc < Inf)
+
+
+Mean_result <- aggregate(cbind(R2, AIC, BIC) ~ Model, filtered_data_results, mean)
+Mean_AICc <- aggregate(cbind(AICc) ~ Model, filtered_data_results, mean)
+print(Mean_AICc)
+print(Mean_result)
+```
+
+```{r}
+
+
+# Assuming combined_results is your data frame that contains the fitting results
+
+
+# Compare models based on the lowest AIC
+best_models_aic <- filtered_data_results %>%
+  group_by(UniqueGrowthCurveID) %>%
+  arrange(AIC) %>%
+  slice(1)
+
+# Compare models based on the lowest BIC
+best_models_bic <- filtered_data_results %>%
+  group_by(UniqueGrowthCurveID) %>%
+  arrange(BIC) %>%
+  slice(1)
+
+# Compare models based on the highest R-squared
+best_models_r2 <- filtered_data_results %>%
+  group_by(UniqueGrowthCurveID) %>%
+  arrange(desc(R2)) %>%
+  slice(1)
+
+# View the results
+head(best_models_aic)
+
+head(best_models_bic)
+head(best_models_r2)
+model_counts_r2 <- best_models_r2 %>%
+  filter(Model %in% c("Cubic","Quadratic", "Linear", "Logistic", "Gompertz")) %>%
+  group_by(Model) %>%
+  tally()
+
+print(model_counts_r2)
+model_counts_aic <- best_models_aic %>%
+  filter(Model %in% c("Cubic","Quadratic", "Linear", "Logistic", "Gompertz")) %>%
+  group_by(Model) %>%
+  tally()
+
+print(model_counts_aic)
+model_counts_bic <- best_models_bic %>%
+  filter(Model %in% c("Cubic","Quadratic", "Linear", "Logistic", "Gompertz")) %>%
+  group_by(Model) %>%
+  tally()
+
+print(model_counts_bic)
+```
+
+Akaike weight
+```{r}
+
+# Assuming combined_results is your data frame with AIC values for each model
+
+# Filter out rows with infinite AIC values
+aic_filtered <- filtered_data_results
+
+# Proceed with Akaike weight calculation using the filtered data
+delta_aic <- aic_filtered$AIC - min(aic_filtered$AIC, na.rm = TRUE)
+relative_likelihoods <- exp(-0.5 * delta_aic)
+akaike_weights <- relative_likelihoods / sum(relative_likelihoods, na.rm = TRUE)
+
+# Add Akaike weights to the filtered data frame
+aic_filtered$AkaikeWeights <- akaike_weights
+
+# Find the model with the maximum Akaike weight
+best_model <- aic_filtered[which.max(aic_filtered$AkaikeWeights), ]
+
+# Display the Akaike weights and the best model
+head(aic_filtered)
+print(best_model)
+```
+plot
+```{r}
+combined_points_linear <- fit_results_linear$points
+combined_points_1 <- combined_points_linear[combined_points_linear$ModelType == "Linear", ]
+combined_points_2 <- combined_points_linear[combined_points_linear$ModelType == "Quadratic", ]
+combined_points_3 <- combined_points_linear[combined_points_linear$ModelType == "Cubic", ]
+for (id in seq_along(subsets)) {
+  tryCatch({
+    subset <- subsets[[id]]
+    
+    # Filter the logistic points for the current subset
+    logistic_points_df <- combined_points_logistic_df[combined_points_logistic_df$UniqueGrowthCurveID == id,]
+    gompertz_points_df <- combined_points_gompertz_df[combined_points_gompertz_df$UniqueGrowthCurveID == id,]
+    linear_points_df <- combined_points_1[combined_points_1$UniqueGrowthCurveID == id, ]
+    quadratic_points_df <- combined_points_2[combined_points_2$UniqueGrowthCurveID == id, ]
+    cubic_points_df <- combined_points_3[combined_points_3$UniqueGrowthCurveID == id, ]
+    # Create the plot
+    p <- ggplot(subset, aes(x = Time, y = LogPopBio)) +
+      geom_point(size = 3) +
+      geom_line(data = logistic_points_df, aes(x = Time, y = LogisticPoints, col = "Logistic equation"), size = 1) +
+      geom_line(data = gompertz_points_df, aes(x = Time, y = GompertzPoints, col = "Gompertz equation"), size = 1) +
+      geom_line(data = linear_points_df, aes(x = Time, y = ModelPoints, col = " Linear equations"),size = 1)+
+      geom_line(data = quadratic_points_df, aes(x = Time, y = ModelPoints, col = "Quadratic equation"), size = 1) +
+      geom_line(data = cubic_points_df, aes(x = Time, y = ModelPoints, col = "Cubic equation"), size = 1)
+    
+    
+    
+    # Additional plot formatting
+p <- p + theme(aspect.ratio = 1) +  # Make the plot square
+  labs(x = "Time", y = "LogPopBio", color = "Model", title = paste("Model Fit for Subset", id)) +
+  scale_color_manual(values = c("Logistic equation" = "red", 
+                                "Gompertz equation" = "blue", 
+                                "Linear equation" = "yellow", 
+                                "Quadratic equation" = "green", 
+                                "Cubic equation" = "purple"))
+
+# Ensure the 'results' directory exists
+results_dir <- "results"
+if (!dir.exists(results_dir)) {
+  dir.create(results_dir)
+}
+# Define the directory paths
+results_dir <- "../results"
+plot_dir <- paste0(results_dir, "/plot")
+
+# Ensure the 'results/plot' directory exists
+if (!dir.exists(plot_dir)) {
+  dir.create(plot_dir, recursive = TRUE)
+}
+
+# Save the plot in the 'results/plot' directory
+plot_filename <- paste0(plot_dir, "/subset_", id, "_plot.png")
+ggsave(plot_filename, plot = p, device = "png", width = 8, height = 6)
+
+  }, error = function(e) {
+    warning("Error in plotting for subset ", id, ": ", e$message)
+
+  })
+}
+```
+
