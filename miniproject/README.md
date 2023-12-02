@@ -4,10 +4,11 @@ This project focuses on microbial growth pattern analysis using statistical mode
 Language Version
 R version 4.1.2
 Python version 3.85
-
+Python is use for clean the data up and R is for model fitting, analyse and plot.
 Dependencies and Packages
 
-This project requires the following dependencies/packages in R:
+This project requires the following dependencies/packages in Python and R:
+
 Pandas
 
     Version: 1.1.3
