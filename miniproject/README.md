@@ -1,4 +1,4 @@
-Optimizing Model Selection in Microbial Growth Analysis: An Evaluation of Goodness-of-Fit Criteria and Statistical Approaches
+Title: Optimizing Model Selection in Microbial Growth Analysis: An Evaluation of Goodness-of-Fit Criteria and Statistical Approaches
 
 This project focuses on microbial growth pattern analysis using statistical modeling in R and Python.
 Language Version
